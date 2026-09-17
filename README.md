@@ -175,10 +175,10 @@ Say what tells it apart from the one already there:
 ./new.py --occasion "Healing Mass"      # a different kind of Mass
 ```
 
-Use the field that can actually distinguish the two. Different venues are told
-apart by `location`, which already prints, so leave `variant` empty — putting the
-venue there too prints it twice. `variant` is for two homilies at the same
-church.
+Use the field that can actually distinguish the two. My rule: different venues
+are told apart by `location`, which already prints, so `variant` stays empty —
+putting the venue there too prints it twice. `variant` is for two homilies at
+the same church. The code only assumes that *some* field differs.
 
 The new draft is named for what you typed (`2026-09-16_arrupe-house.md`) and
 starts as a copy of the day's existing draft, since that is usually the text you
@@ -246,20 +246,26 @@ source: ''                                # the .docx this was imported from, if
 ---
 ```
 
-| Field | |
-|---|---|
-| `date` | Must match the filename |
-| `title` | **The liturgical day**, in the canonical short form below. Prints |
-| `occasion` | Why this Mass happened: `Healing Mass`, `<Surname> Funeral`. Prints bold; omitted when blank |
-| `location` | The venue. Prints |
-| `preached` | The pruned citation line. Blank falls back to `readings` minus the psalm |
-| `variant` | Title-cased: `Manuscript`, `Preaching Text`, `With Baptisms`. Never the venue |
-| `rite` | Empty or `Roman`; otherwise `Maronite` or `Chaldean` |
-| `lectionary_string` | USCCB's own wording. Never write it by hand |
-| `source` | Provenance for imported drafts; what lets the importer recognise its own output |
+Some of what follows the code depends on; the rest is how I keep my archive.
+The table says which. The conventions are worth adopting as a set — they are
+what make the archive sortable and searchable — but they are mine, and nothing
+breaks if yours differ, as long as you are consistent.
 
-`title`, `occasion` and `lectionary_string` are three different kinds of thing,
-and an archive where they blur cannot be sorted or searched:
+| Field | | |
+|---|---|---|
+| `date` | Must match the filename | code |
+| `title` | **The liturgical day**, in the short form below. Prints | convention; the tools write it this way |
+| `occasion` | Why this Mass happened: `Healing Mass`, `<Surname> Funeral`. Prints bold; omitted when blank | convention — except that the word `Funeral` is what `new.py` keys on |
+| `location` | The venue. Prints | code |
+| `preached` | The pruned citation line. Blank falls back to `readings` minus the psalm | code |
+| `variant` | Title-cased: `Manuscript`, `Preaching Text`, `With Baptisms`. Never the venue | convention |
+| `rite` | Empty or `Roman`; otherwise `Maronite` or `Chaldean` | code: names the PDF and picks the calendar |
+| `lectionary_string` | USCCB's own wording. Never write it by hand | convention; `new.py` only ever fills it from USCCB |
+| `source` | Provenance for imported drafts; what lets the importer recognise its own output | code |
+
+**How I tell `title`, `occasion` and `lectionary_string` apart.** They are three
+different kinds of thing, and an archive where they blur cannot be sorted or
+searched:
 
 | Field | Holds | Not |
 |---|---|---|
@@ -275,8 +281,11 @@ importer normalize them.
 
 ### Canonical day forms
 
-`standardize_day()` writes `title` in one of four shapes, so the archive groups
-by season:
+These are my forms. `standardize_day()` produces them, so an imported archive
+lands on them whether or not you would have chosen them; `new.py` writes them
+too. If yours differ, change the tables in `homilist.py` — the point is one day
+written one way, so the archive groups by season, not these forms in
+particular:
 
 | Shape | Form | Examples |
 |---|---|---|
