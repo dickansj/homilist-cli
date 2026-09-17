@@ -81,8 +81,8 @@ def homilies_dir():
 
 
 def tmp_dir():
-    """Scratch space, kept in the repo rather than in the homily directory
-    so it never lands in the Parish Mirror or gets indexed."""
+    """Scratch space, kept in the repo rather than in the homily directory,
+    so it never lands in the parish archive or gets indexed with it."""
     path = os.path.join(SCRIPT_DIR, "tmp")
     os.makedirs(path, exist_ok=True)
     return path
@@ -205,8 +205,8 @@ def pdf_dir():
 #        .docx extension and match any glob, but they are not documents and
 #        not even valid ZIP containers.
 #   ._   AppleDouble resource forks, written when a Mac copies a file onto a
-#        volume that cannot hold its metadata. This archive is backed by
-#        OneDrive, so they appear.
+#        volume that cannot hold its metadata. A cloud-synced archive
+#        collects them.
 #   .    Dotfiles generally, .DS_Store included.
 _SIDECAR_PREFIXES = ("~$", "._", ".")
 

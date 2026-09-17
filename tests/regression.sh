@@ -10,7 +10,7 @@ echo "unit checks:"
 env/bin/python tests/units.py || fail=1
 
 # The scripts operate on a directory of homilies; give them a throwaway one so a
-# test run can never touch the Parish Mirror.
+# test run can never touch the real archive.
 sandbox=$(mktemp -d)
 export HOMILIES_DIR="$sandbox"
 trap 'rm -rf "$sandbox"' EXIT

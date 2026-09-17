@@ -4,8 +4,9 @@ Command-line homily drafting: Markdown + YAML frontmatter →
 [pandoc](https://pandoc.org) → [Typst](https://typst.app) → a PDF built for
 reading at the ambo.
 
-**This repo contains code only.** The homily text lives outside it, in the Parish
-Mirror, so drafts get indexed by DEVONthink and stay out of version control.
+**This repo contains code only.** The homily text lives outside it, in the parish
+archive — a synced folder that a document manager indexes — and stays out of
+version control.
 `.gitignore` blocks `*.md`/`*.pdf`/`*.docx` as a safety net.
 
 ## Credit
@@ -66,7 +67,7 @@ Homilies/                 ← archive root: rendered PDFs land here
 
 Enumeration goes through `homilist.documents()` and `homily_files()`, which drop
 application and filesystem artifacts: `~$` Word owner files, `._` AppleDouble
-forks (this tree is on OneDrive), and dotfiles. Word's owner files are the
+forks (from cloud-synced volumes), and dotfiles. Word's owner files are the
 awkward ones — the prefix *replaces* the first two characters rather than being
 added, so `~$mily Healing of the Blind Man.docx` keeps its length and still reads
 like a title, while being neither a document nor a valid ZIP.
@@ -576,7 +577,7 @@ redistributed.
 ```
 
 Unit checks plus a full command run against a throwaway homily directory, so a
-test run can never touch the Parish Mirror. Expect `all green`.
+test run can never touch the real archive. Expect `all green`.
 
 - **The USCCB scraper**, against saved fixtures — no network. Its failure mode is a
   homily file with blank metadata noticed at the wrong moment; the important case

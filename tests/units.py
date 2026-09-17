@@ -538,7 +538,7 @@ def test_sidecar_files():
         # Word owner files, as they actually appeared
         ("~$mily Healing of the Blind Man.docx", True),
         ("~$rth of John the Baptist.docx", True),
-        # AppleDouble resource forks -- this tree is backed by OneDrive
+        # AppleDouble resource forks -- a cloud-synced archive collects them
         ("._Homily 280.docx", True),
         ("._2026-08-02.md", True),
         # dotfiles
