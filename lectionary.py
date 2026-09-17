@@ -21,6 +21,7 @@ so it is fetched on demand rather than redistributed here.
 
 import json
 import os
+import re
 
 import homilist
 
@@ -44,25 +45,42 @@ def available():
     return bool(_load())
 
 
+# The source's placeholders where a row does not carry its own readings: a
+# cross-reference to another page, or a note that the readings are chosen from
+# a range of options (All Souls, ritual Masses). Neither is a citation.
+PLACEHOLDER = re.compile(r"^\s*(\(|\[|\.\s*$|see\b)", re.I)
+
+
+def is_placeholder(entry):
+    """A row that names no readings of its own -- or names a menu of them.
+    Two alternates ("Matt 10:17-22 or Luke 1:26-38") is an appointed choice;
+    All Souls lists thirteen first readings, which is a list to choose from."""
+    if not entry:
+        return True
+    for key in ("first", "gospel"):
+        text = entry.get(key, "") or ""
+        if PLACEHOLDER.match(text) or text.count(" or ") >= 3:
+            return True
+    return False
+
+
 def readings_for(number, year=None):
-    """The readings for a lectionary number, or None if not in the table.
+    """The readings for a lectionary number, or None if the table cannot say.
 
     Ordinary Time weekdays carry two first readings for one number, so `year`
     picks between them; everywhere else it is ignored. Asking for an OT number
     without a year is ambiguous rather than wrong, so it returns None instead of
-    silently choosing one.
+    silently choosing one. So does a number whose readings are chosen from
+    options: the choice is the preacher's.
     """
     if number is None:
         return None
-    table = _load()
-    entry = table.get(str(number))
+    entry = _load().get(str(number))
     if not entry:
         return None
     if isinstance(entry, dict) and {"I", "II"} & set(entry):
-        if year not in ("I", "II"):
-            return None
-        return entry.get(year)
-    return entry
+        entry = entry.get(year) if year in ("I", "II") else None
+    return None if is_placeholder(entry) else entry
 
 
 def readings_line(number, year=None):

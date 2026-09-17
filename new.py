@@ -493,9 +493,7 @@ else:
         print("   Falling back to the local calendar and lectionary table...")
 
         number = liturgical.lectionary_number(target_date)
-        liturgical_year = target_date.year + (
-            1 if target_date >= liturgical.advent_start(target_date.year) else 0)
-        cycle = "I" if liturgical_year % 2 else "II"
+        cycle = liturgical.ferial_year(target_date)
 
         if number:
             metadata["lectionary_number"] = number

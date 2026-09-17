@@ -214,7 +214,13 @@ def build(refresh=False):
                 slot[year] = best(entries)
                 table[number] = slot
             else:
-                table.setdefault(number, best(entries))
+                # A number can appear on two pages, one of them a placeholder
+                # pointing at the other -- "( see the Sunday Lectionary )". The
+                # real entry wins whichever page came first.
+                chosen = best(entries)
+                if number not in table or (lectionary.is_placeholder(table[number])
+                                           and not lectionary.is_placeholder(chosen)):
+                    table[number] = chosen
 
     path = lectionary.cache_path()
     os.makedirs(os.path.dirname(path), exist_ok=True)

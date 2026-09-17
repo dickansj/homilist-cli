@@ -423,6 +423,14 @@ def test_liturgical_calendar():
         ("2026-04-12", 43, "Sun 2nd of Easter, Year A"),
         ("2026-05-24", 63, "Pentecost"),
         ("2026-06-07", 167, "Corpus Christi, Year A"),
+        # Fixed feasts that displace the day -- including an OT Sunday.
+        ("2026-12-26", 696, "St Stephen, not a string from describe()"),
+        ("2026-11-01", 667, "All Saints on a Sunday beats the OT Sunday"),
+        ("2026-11-02", 668, "All Souls"),
+        ("2026-08-15", 622, "Assumption"),
+        ("2027-01-03", 20, "Epiphany Sunday"),
+        ("2027-01-10", 21, "Baptism of the Lord"),
+        ("2026-03-29", 37, "Palm Sunday A: a season Sunday is not displaced"),
         ("2026-03-25", 545, "the Annunciation, a fixed date"),
         ("2024-10-28", 666, "Simon and Jude, a fixed date"),
         # 25 December must not report as the fourth week of Advent: Advent
@@ -478,6 +486,12 @@ def test_lectionary_table():
     ]:
         entry = lectionary.readings_for(number, year) or {}
         check(f"lectionary table {number} {year or ''}", entry.get("gospel"), gospel)
+    # All Souls lists every option from the Masses for the Dead. That is a menu,
+    # not the day's readings, and the preacher chooses.
+    check("a menu of options is not a set of readings",
+          lectionary.readings_for(668), None)
+    check("but its cross-referenced neighbours resolve",
+          bool(lectionary.readings_for(20)), True)
 
     # Year I and Year II differ in the first reading and agree on the Gospel.
     first_i = (lectionary.readings_for("491", "I") or {}).get("first")

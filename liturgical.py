@@ -64,23 +64,37 @@ _TRINITY = (164, 165, 166)
 _CORPUS_CHRISTI = (167, 168, 169)
 _HOLY_FAMILY = 17               # the Sunday in the octave of Christmas
 
-# Weekdays of the Christmas octave and season.
-_CHRISTMAS_WEEKDAYS = {(12, 29): 202, (12, 30): 203, (12, 31): 204,
+# Weekdays of the Christmas octave and season. 26-28 December are feasts with
+# numbers of their own (Stephen, John, the Holy Innocents).
+_CHRISTMAS_WEEKDAYS = {(12, 26): 696, (12, 27): 697, (12, 28): 698,
+                       (12, 29): 202, (12, 30): 203, (12, 31): 204,
                        (1, 2): 205, (1, 3): 206, (1, 4): 207, (1, 5): 208,
                        (1, 6): 209, (1, 7): 210}
 
-# Fixed-date solemnities and feasts seen in this corpus.
+# Fixed-date solemnities and feasts that displace the day's readings. The
+# solemnities and feasts of the Lord here also displace an Ordinary Time Sunday;
+# the memorials do not, and are not listed.
 _FIXED = {
     (12, 25): 16,    # Christmas, Mass during the Day
     (1, 1): 18,      # Mary, Mother of God
+    (2, 2): 524,     # The Presentation of the Lord
     (3, 19): 543,    # Joseph, Spouse of the BVM
     (3, 25): 545,    # The Annunciation
     (6, 24): 587,    # The Birth of John the Baptist (day)
+    (6, 29): 591,    # Peter and Paul (day)
     (7, 22): 603,    # Mary Magdalene
     (7, 29): 607,    # Martha, Mary and Lazarus
+    (8, 6): 614,     # The Transfiguration
+    (8, 15): 622,    # The Assumption (day)
+    (9, 14): 638,    # The Exaltation of the Holy Cross
     (10, 28): 666,   # Simon and Jude
+    (11, 1): 667,    # All Saints
+    (11, 2): 668,    # All Souls
+    (11, 9): 671,    # The Dedication of the Lateran Basilica
     (12, 8): 689,    # The Immaculate Conception
 }
+_EPIPHANY = 20
+_BAPTISM_OF_THE_LORD = 21
 
 
 def easter(year):
@@ -180,9 +194,17 @@ def lectionary_number(date):
     fixed = _FIXED.get((date.month, date.day))
     season, week, weekday = liturgical_day(date)
 
-    if weekday == 6:  # Sunday -- the proper of the season wins over a fixed feast
+    if weekday == 6:  # Sunday
         index = _cycle_index(date)
         easter_day = easter(date.year)
+        # A fixed solemnity or feast of the Lord displaces an Ordinary Time
+        # Sunday; the seasons of Advent, Lent and Easter keep their Sundays.
+        if fixed and season == "OT":
+            return fixed
+        if date == _sunday_on_or_after(datetime.date(date.year, 1, 2)):
+            return _EPIPHANY
+        if date == baptism_of_the_lord(date.year):
+            return _BAPTISM_OF_THE_LORD
         if date == easter_day:
             return _EASTER_SUNDAY
         if date == easter_day - _DAY * 7:
@@ -212,13 +234,6 @@ def lectionary_number(date):
     if weekday_christmas and season == "Christmas":
         return weekday_christmas
 
-    if season == "Christmas" and date.month == 12 and date.day >= 25:
-        # 25 December is Christmas; 26-31 are numbered days of its octave.
-        if date.day == 25:
-            return "Christmas"
-        n = date.day - 24
-        suffix = {1: "st", 2: "nd", 3: "rd"}.get(n % 10, "th")
-        return f"{n}{suffix} Day in the Octave of Christmas"
     if season == "AshWeek":
         return _ASH_WEDNESDAY + (date - (easter(date.year) - _DAY * 46)).days
     if season == "Lent" and week:
@@ -242,6 +257,15 @@ def lectionary_number(date):
     if season == "Advent" and week and week <= 3 and date.day < 17:
         return _ADVENT_WEEK1_MONDAY + 6 * (week - 1) + weekday
     return None
+
+
+def ferial_year(date):
+    """Year I or II, which picks the first reading on Ordinary Time weekdays.
+
+    Odd liturgical years are Year I. The liturgical year begins at Advent, so
+    December of 2026 already belongs to 2027."""
+    year = date.year + (1 if date >= advent_start(date.year) else 0)
+    return "I" if year % 2 else "II"
 
 
 _SEASON_NAMES = {"OT": "OT", "Lent": "Lent", "Easter": "Easter",
