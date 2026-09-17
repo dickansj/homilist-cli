@@ -1,0 +1,33 @@
+# Copy to config.toml (gitignored) and point it at wherever the homily
+# markdown lives. $HOMILIES_DIR overrides this; with neither set, the scripts
+# fall back to the parent directory, which is @sjml's original layout.
+
+homilies_dir = "~/Parish/Mirror/Homilies/Drafts"
+
+# Folders that may hold a per-occasion copy of a rendered homily, so
+# `render.py --to Ashgrove` can find one without typing the whole path.
+# Relative entries are resolved against the archive root, then against its
+# parent -- these folders usually sit beside the archive rather than in it.
+copy_roots = ["Funerals", "Weddings", "Schools"]
+
+# For importing a .docx archive (tools/import_docx.py). Some documents open with
+# the preacher's own name, which would otherwise be read as the liturgical day.
+presider_names = ["Fr. Jane Smith", "Jane Smith"]
+
+# Venues confirmed by hand, so the importer can tell a place in parentheses
+# after the liturgical day -- "(St. Anne)" -- from a Gospel theme written the
+# same way. Anything not listed is judged by its shape.
+known_locations = ["St. Anne", "St. Anne School", "Alumni Chapel"]
+
+# Where new.py opens a draft it has just written. Unset, $VISUAL and $EDITOR are
+# tried, then the terminal's own editor if it says which. Only when someone is
+# at the keyboard -- a scripted run opens nothing.
+editor = "bbedit"
+
+# What wc.py measures a draft against. Speed sets the time estimate; the word
+# targets are what a homily of each kind should come to. Funerals, weddings and
+# Eastern homilies are reported without a target.
+[pace]
+wpm = 135
+sunday = [675, 945]     # 5–7 minutes
+daily_max = 405         # under 3 minutes

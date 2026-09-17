@@ -1,0 +1,11 @@
+env/
+tmp/
+config.toml
+__pycache__/
+
+# Belt and braces: homily text lives in the Parish Mirror and must never be
+# committed here, even if a stray file lands in this directory.
+*.md
+*.pdf
+*.docx
+!README.md
