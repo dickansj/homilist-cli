@@ -4,8 +4,8 @@
 
 """Put the whole corpus in one file, for grepping or for handing to something.
 
-    ./concat.py            -> tmp/all.txt, in the repo, where a document manager
-                              not index a second copy of every homily
+    ./concat.py            -> tmp/all.txt, in the repo, so a document manager
+                              does not index a second copy of every homily
     ./concat.py -          -> stdout, to pipe into grep or a model
     ./concat.py PATH       -> that file, relative to where you are
 """
