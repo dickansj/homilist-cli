@@ -24,13 +24,6 @@ import lectionary
 import litcal_api
 import liturgical
 
-# Overridable so the test suite can force the local fallback deterministically;
-# USCCB answers intermittently, so a test that depends on it failing would be
-# as flaky as one that depends on it working.
-USCCB_WEB_TEMPLATE = os.environ.get(
-    "USCCB_URL_TEMPLATE", "https://bible.usccb.org/bible/readings/%m%d%y.cfm")
-
-
 HOMILIES = homilist.homilies_dir()
 TMP = homilist.tmp_dir()
 
@@ -446,13 +439,17 @@ FUNERAL = re.search(r"\bfunerals?\b", metadata["occasion"], re.I)
 # USCCB is tried once. It is the more current source and it owns
 # `lectionary_string`, the calendar's own full name for the date -- nothing
 # else supplies that; LiturgicalCalendarAPI and the offline route both leave it
-# empty rather than substitute their own wording. But USCCB sits behind a bot
-# challenge that a script usually fails, so a failure falls through: first to
-# LiturgicalCalendarAPI (live, but independent of USCCB's uptime), then to the
-# offline calendar and lectionary table, then to whatever
-# tools/sync_litcal_api.py has already cached for a date the offline route
-# cannot answer on its own. One attempt at each, not a retry loop: the failure
-# is a policy, not a hiccup.
+# empty rather than substitute their own wording. USCCB sits behind a bot
+# challenge that a script usually fails, so a failure asks two independent
+# sources for the same date -- LiturgicalCalendarAPI, live, and the offline
+# calendar and lectionary table, no network at all -- rather than trusting
+# whichever answers first: neither is infallible (catholic-resources.org's own
+# page gives the wrong verse range for lectionary 447/Year II), and a date
+# where they disagree is worth a second look rather than a silent guess. A
+# curated answer in tmp/litcal_api/overrides.json, from a past resolution or
+# tools/sync_litcal_api.py, is checked before either live source and settles
+# the question without asking twice. One attempt at each live source, not a
+# retry loop: the failure is a policy, not a hiccup.
 if FUNERAL:
     print(f"Funeral ({metadata['occasion']}) — no lectionary number; "
           "the readings are chosen for the Mass.")
@@ -470,7 +467,7 @@ if FUNERAL:
 else:
     print("Looking up readings from USCCB website...")
 
-    url_req = target_date.strftime(USCCB_WEB_TEMPLATE)
+    url_req = target_date.strftime(homilist.USCCB_WEB_TEMPLATE)
     dl_path = os.path.join(TMP, os.path.basename(url_req))
     try:
         if not os.path.exists(dl_path):
@@ -495,49 +492,89 @@ else:
         # One line is enough to say which way the draft was built.
         message = getattr(exc, "message", exc.__class__.__name__)
         print(f"   USCCB didn't answer ({message.splitlines()[0][:90]})")
-        print("   Falling back to LiturgicalCalendarAPI...")
 
-        # `readings` only: like the offline route below, this is not USCCB's
-        # wording, so `lectionary_string` stays empty rather than borrow a
-        # different source's phrasing for the same field.
-        try:
-            found = litcal_api.lookup(target_date)
-        except litcal_api.LitCalAPIError as api_exc:
-            print(f"   LiturgicalCalendarAPI didn't answer "
-                  f"({api_exc.message.splitlines()[0][:90]})")
-            found = None
+        # The offline number is cheap, pure, and usually right even on a date
+        # whose *reading text* is in question below -- known separately from
+        # which source's citations get trusted for `readings`.
+        number = liturgical.lectionary_number(target_date)
+        if number:
+            metadata["lectionary_number"] = number
 
-        if found:
-            metadata["readings"] = found["readings"]
-            print(f"   LiturgicalCalendarAPI: {found['name']}")
+        override = litcal_api.override_lookup(target_date)
+        if override:
+            metadata["readings"] = override["readings"]
+            print(f"   using the saved answer for this date: {override['name']}")
+            print(f"   ({override.get('source', 'saved')}, from "
+                  "tmp/litcal_api/overrides.json — not live)")
+
         else:
-            print("   Falling back to the offline calendar and lectionary table...")
-
-        if not found:
-            number = liturgical.lectionary_number(target_date)
             cycle = liturgical.ferial_year(target_date)
+            offline_line = lectionary.readings_line(number, cycle) if number else ""
+            offline_entry = lectionary.readings_for(number, cycle) if number else None
+            offline_compare = {
+                "first": homilist.normalize_citations((offline_entry or {}).get("first", "")),
+                "second": homilist.normalize_citations((offline_entry or {}).get("second", "")),
+                "gospel": homilist.normalize_citations((offline_entry or {}).get("gospel", "")),
+            }
 
-            if number:
-                metadata["lectionary_number"] = number
-                # `preached` is deliberately left empty, as on the USCCB route. It is
-                # the line you prune by hand, and filling it here made the scaffolder
-                # behave two different ways depending on whether a website answered.
-                metadata["readings"] = lectionary.readings_line(number, cycle)
+            print("   Checking LiturgicalCalendarAPI and the offline calendar "
+                  "and lectionary table...")
+            try:
+                found = litcal_api.lookup(target_date)
+            except litcal_api.LitCalAPIError as api_exc:
+                print(f"   LiturgicalCalendarAPI didn't answer "
+                      f"({api_exc.message.splitlines()[0][:90]})")
+                found = None
 
-            if metadata["readings"]:
-                print(f"   local: {metadata['lectionary_number']}: {metadata['title']}")
+            if found and offline_line and litcal_api.citations_agree(found, offline_compare):
+                metadata["readings"] = offline_line
+                print(f"   LiturgicalCalendarAPI and the offline calendar agree: "
+                      f"{number}: {metadata['title']}")
+
+            elif found and offline_line:
+                # They both answered and don't match -- catholic-resources.org's
+                # own page gives 1 Cor 15:12-22 for lectionary 447/Year II, which
+                # is not what USCCB or the API say, so neither side is trusted
+                # by default. Interactive only: a scripted run has no one to ask,
+                # so it leaves `readings` blank rather than guess.
+                print("   LiturgicalCalendarAPI and the offline table disagree:")
+                print(f"     1) LiturgicalCalendarAPI: {found['readings']}")
+                print(f"     2) offline table:         {offline_line}")
+                choice = ""
+                if sys.stdin.isatty():
+                    try:
+                        choice = input(
+                            "   Which one? [1/2, blank to leave for later] > ").strip()
+                    except (KeyboardInterrupt, EOFError):
+                        print()
+                        raise SystemExit(130)
+                if choice == "1":
+                    metadata["readings"] = found["readings"]
+                    litcal_api.save_override(target_date, found, "resolved-api")
+                    print("   saved to tmp/litcal_api/overrides.json")
+                elif choice == "2":
+                    metadata["readings"] = offline_line
+                    litcal_api.save_override(
+                        target_date,
+                        {"name": metadata["title"], "readings": offline_line,
+                         **offline_compare},
+                        "resolved-offline")
+                    print("   saved to tmp/litcal_api/overrides.json")
+                else:
+                    err = True
+                    sys.stderr.write(
+                        "   Leaving `readings` blank -- resolve by hand, or "
+                        "re-run interactively to choose.\n")
+
+            elif found:
+                metadata["readings"] = found["readings"]
+                print(f"   LiturgicalCalendarAPI: {found['name']}")
+
+            elif offline_line:
+                metadata["readings"] = offline_line
+                print(f"   local: {number}: {metadata['title']}")
+
             else:
-                # Whatever tools/sync_litcal_api.py has already cached for this
-                # date, if the offline calendar and table cannot answer on their
-                # own -- no network call here, so this still works with none.
-                filled = litcal_api.gap_fill_lookup(target_date)
-                if filled:
-                    metadata["readings"] = filled["readings"]
-                    print(f"   gap-fill cache: {filled['name']}")
-                    print("   (from LiturgicalCalendarAPI, synced by "
-                          "tools/sync_litcal_api.py — not live)")
-
-            if not metadata["readings"]:
                 err = True
                 if not number:
                     sys.stderr.write(

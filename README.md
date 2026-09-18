@@ -74,7 +74,7 @@ The rest of `config.toml`:
 | `./concat.py [- \| PATH]` | The whole corpus in one file: `tmp/all.txt`, or stdout with `-`, or a path |
 | `tools/themes.py` | Writes `Drafts/_themes.md`: every homily's themes and images, one line each |
 | `tools/fetch_lectionary.py` | Builds the lectionary-number → readings table |
-| `tools/sync_litcal_api.py` | Fills the offline calendar's gaps from LiturgicalCalendarAPI, ahead of time |
+| `tools/sync_litcal_api.py` | Fills the offline calendar's gaps ahead of time, or patches in a correction by hand |
 | `tools/import_docx.py` | Creates drafts from an existing `.docx` archive |
 | `tools/verify_import.py` | Audits imported drafts against their sources; writes a metadata table |
 | `tools/locations.py`, `tools/readings.py` | Worksheets for filling a field across many drafts |
@@ -86,8 +86,9 @@ name, with or without `.md`.
 Three modules are libraries rather than commands: `liturgical.py` (the offline
 calendar: `lectionary_number`, `dates_for_lectionary`, `describe`, `easter`),
 `lectionary.py` (the offline readings for a number), and `litcal_api.py`
-(LiturgicalCalendarAPI: `lookup`, the live fallback between USCCB and the
-offline route; `gap_fill_lookup`, the cache `tools/sync_litcal_api.py` builds).
+(LiturgicalCalendarAPI: `lookup`, the live source that stands in for USCCB;
+`citations_agree`, whether two sources' readings are the same; `override_lookup`
+and `save_override`, the curated cache in `tmp/litcal_api/overrides.json`).
 
 ## Writing a homily
 
@@ -105,42 +106,45 @@ Arrow keys move, `t` is today, `Enter` chooses. Then two prompts: **Location**
 as `Drafts/YYYY-MM-DD.md` and opened in your editor. An existing file is never
 overwritten. Only `--date` skips the picker; the other flags pre-fill a prompt.
 
-The readings come from one of four sources, tried in order until one answers:
+**How readings get filled, in order:**
 
-1. **USCCB**, scraped live. It sits behind a bot challenge that scripts usually
-   fail, so expect this to miss most of the time.
-2. **[LiturgicalCalendarAPI](https://github.com/Liturgical-Calendar/LiturgicalCalendarAPI)**,
-   queried live for the US national calendar. An independent computation of the
-   same Roman Rite calendar, not dependent on USCCB's uptime. It also knows
-   about the days an ordinary date doesn't cover: a Mass with more than one
-   time of day (Christmas, Easter Sunday) and the Easter Vigil's own sevenfold
-   shape are both handled, and the Chrism Mass never shoulders out Holy
-   Thursday's evening Mass, which shares its date and its rank. Two of the
-   entries this queries — Christmas and All Saints — have empty readings in
-   the API's own data as of this writing, so those two dates still fall
-   through to the offline route below.
-3. **The offline calendar and lectionary table** (`liturgical.py` +
-   `lectionary.py`), no network at all. It computes the lectionary number and
-   looks the readings up in the table you fetched at setup — but it says so
-   itself: it does not know the whole sanctoral calendar, so some dates (the
-   O Antiphon days before Christmas, most memorials) come up empty here. The
-   Easter Vigil is a subtler case: it has a lectionary number, but that
-   number's entry in the fetched table doesn't resolve to readings, so it
-   comes up empty here too.
-4. **The gap-fill cache**, whatever `tools/sync_litcal_api.py` has already
-   found for a date the offline route can't answer. Also no network at call
-   time — the network happened whenever that tool last ran.
+1. **USCCB**, scraped live. Trusted outright when it answers — the more
+   current source, and the only one whose wording lands in `lectionary_string`.
+   It sits behind a bot challenge that scripts usually fail, so expect to
+   miss it most of the time.
+2. **A saved answer** in `tmp/litcal_api/overrides.json`, if this date is
+   already in it. No network call, and settled — nothing below runs.
+3. **[LiturgicalCalendarAPI](https://github.com/Liturgical-Calendar/LiturgicalCalendarAPI)**
+   (live, US national calendar) **and the offline calendar + lectionary
+   table** (`liturgical.py` + `lectionary.py`, no network), asked together
+   rather than one after the other:
+   - only one answers → used, no question asked
+   - both answer and **agree** → used (compared on first/second/gospel only —
+     see `citations_agree()`; the psalm's punctuation can differ by source
+     even when the passage doesn't)
+   - both answer and **disagree** → flagged. Interactively, `new.py` prints
+     both and asks which to keep, then saves the answer to `overrides.json`
+     so the date is settled from then on. Non-interactively there's no one to
+     ask, so `readings` is left blank rather than guessed.
+   - neither answers → `readings` stays blank
 
-Each tries once; a failure falls through rather than retrying. Run
-`tools/sync_litcal_api.py` occasionally (there's nothing to schedule it with
-here, but cron or a periodic task runner both work) so tier 4 stays useful
-without new.py ever depending on a network at the moment you scaffold a draft.
+Neither live source is infallible on its own, which is the point of checking
+both rather than trusting whichever answers first — catholic-resources.org's
+own page (which the offline table is built from) gives 1 Cor 15:12-22 for
+lectionary 447/Year II, where USCCB and the API both say 12-20.
+
+The offline route also has known gaps beyond a plain missing number: it
+doesn't cover a Mass with more than one time of day (Christmas, Easter
+Sunday) or the Easter Vigil's sevenfold shape, and it doesn't know the whole
+sanctoral calendar (the O Antiphon days before Christmas, most memorials).
+LiturgicalCalendarAPI covers all of that, including keeping the Chrism Mass
+from shouldering out Holy Thursday's own Evening Mass.
 
 | Field | Filled from |
 |---|---|
 | `title` | Always the offline calendar, in the archive's short form (`Wed 12th of OT`) |
-| `lectionary_number` | USCCB or the offline calendar; empty from the API or the gap-fill cache |
-| `readings` | Whichever of the four sources above answered first |
+| `lectionary_number` | USCCB or the offline calendar; empty from the API or a saved answer |
+| `readings` | Whichever source above settled it — USCCB, agreement, your choice on a conflict, or a saved answer |
 | `lectionary_string` | USCCB only — the calendar's own name for the day. Empty otherwise |
 | `preached` | Always empty: it is the line you prune by hand |
 
@@ -463,39 +467,42 @@ not committed: it is someone else's compilation.
 Where a number heads several rows, the table keeps the appointed readings and
 records the alternates beside them; choosing is the preacher's call.
 
-## Filling the offline calendar's gaps
+## The curated cache: filling gaps and fixing mistakes
 
 ```bash
-tools/sync_litcal_api.py             # today through ~13 months out
-tools/sync_litcal_api.py --days 30   # a narrower window
-tools/sync_litcal_api.py --refresh   # recheck dates already cached
+tools/sync_litcal_api.py                  # today through ~13 months out
+tools/sync_litcal_api.py --days 30        # a narrower window
+tools/sync_litcal_api.py --refresh        # recheck dates already cached
+tools/sync_litcal_api.py --patch 2026-09-18 --readings \
+    "1 Cor 15:12-20; Ps 17:1bcd, 6-7, 8b+15; Luke 8:1-3"
 ```
 
-`liturgical.py` computes the temporal cycle (Advent, Lent, Easter, Ordinary
-Time) but not the whole sanctoral calendar, so some dates — the O Antiphon days
-before Christmas, most memorials — have no offline answer. The Easter Vigil is
-in range too, for a different reason: `liturgical.py` does resolve it to a
-lectionary number, but that number's entry in the fetched table doesn't
-resolve to readings, so it reads as a gap the same way a missing number does.
-This script asks
-[LiturgicalCalendarAPI](https://github.com/Liturgical-Calendar/LiturgicalCalendarAPI)
-for every date in range where the offline route would currently come up empty,
-and writes what it finds to `tmp/litcal_api/gap_fill.json`. `new.py` checks
-that cache, with no network call of its own, after `liturgical.py` and
-`lectionary.py` have both had nothing to say.
+`tmp/litcal_api/overrides.json` is a curated answer, one date at a time, that
+`new.py` checks before asking either live source again. Two things put an
+entry there:
 
-Run it whenever there's a network — after cloning, and every so often after
-that — the same way `tools/fetch_lectionary.py` is a once-off rather than
-something `new.py` does for you. Nothing here schedules it; cron or a periodic
-task runner both work, or just remember to run it now and then. Its window
-looks forward from today, so a date already in the past when you run it (last
-Easter, say) never gets cached — moot for actual use, since a past date's
-homily was scaffolded when it still had a chance to be tried live.
+**Gaps**, filled ahead of time. With no arguments, `tools/sync_litcal_api.py`
+checks every date in its window (today onward — a past date is moot, since it
+already had its chance to be tried live) for one the offline route can't
+answer (see the known gaps above), and for each one tries USCCB once, then
+LiturgicalCalendarAPI. USCCB rarely lands here either — Shane's own words,
+closing the PR this project once sent him, were that the bot challenge means
+"a script never passes it; the occasional 200 is an edge-cache hit, not a
+change of heart" — but it's one cheap request, so it's worth trying first.
+Nothing schedules this run; use cron, a periodic task runner, or just
+remember to run it now and then.
 
-`litcal_api.py`'s live `lookup()` (tier 2 in the list above) and this script's
-offline `gap_fill_lookup()` (tier 4) are two uses of the same API, one at
-homily-scaffolding time and one ahead of it — see `litcal_api.py`'s own
-docstring for why the API's own wording never lands in `lectionary_string`.
+**Corrections**, for a date the offline table answers *wrong* rather than not
+at all — which only a live cross-check or a human can catch; nothing audits
+the whole table against a live source on its own. `new.py`'s conflict prompt
+saves one automatically when you answer it; `tools/sync_litcal_api.py --patch`
+adds one by hand for a bad entry noticed some other way, which is how today's
+1 Cor 15:12-22 (lectionary 447/Year II) got fixed here.
+
+`litcal_api.py`'s live `lookup()` and this script's offline `override_lookup()`
+are two uses of the same API, one at homily-scaffolding time and one ahead of
+it — see `litcal_api.py`'s own docstring for what ends up in the cache and
+why the API's own wording never lands in `lectionary_string`.
 
 ## Tests
 
@@ -510,13 +517,24 @@ checks are skipped, not failed, until the table has been fetched.
 The USCCB scraper is tested against saved fixtures with no network; the fixtures
 keep the page's structure and contain no scripture text. LiturgicalCalendarAPI's
 `parse()` is likewise tested against a small fixture dict rather than the live
-API. `new.py`'s offline fallback is forced by pointing *both* live lookups —
-USCCB and LiturgicalCalendarAPI — at a closed port, since a test that depended
-on either answering, or failing, would be as flaky as one that depended on the
-network at all; the gap-fill cache is tested the same way, on a date the
-offline calendar itself cannot answer, with a cache entry the test writes and
-then restores afterward (it lives in `tmp/`, not the sandbox, so a real cache
-from `tools/sync_litcal_api.py` is never at risk of being overwritten for good).
+API, and `citations_agree()` has its own unit tests, today's actual conflict
+(lectionary 447/Year II) among them. `new.py`'s offline fallback is forced by
+pointing *both* live lookups — USCCB and LiturgicalCalendarAPI — at a closed
+port, since a test that depended on either answering, or failing, would be as
+flaky as one that depended on the network at all.
+
+A disagreement between the two live sources is tested the same way, with the
+API's side faked by seeding its year cache for a throwaway host rather than
+depending on catholic-resources.org's table actually being wrong on the day
+the tests happen to run: the test asserts that both readings are printed and
+that `readings` comes back blank (there is no tty in a test run to answer the
+prompt), not that a conflict happens to exist right now. The curated cache is
+tested by seeding `tmp/litcal_api/overrides.json` directly, for a date the
+offline calendar cannot answer at all. Both tests, plus the one before them,
+touch that same file, which lives in `tmp/`, not the sandbox — the same as
+USCCB's and LiturgicalCalendarAPI's page caches — so a real cache (today's
+own patched correction among them) is backed up before any of the three runs
+and restored once all three are done, not overwritten for good.
 
 ## The template
 
@@ -540,7 +558,8 @@ drafts, the themes index, and importing and auditing an existing archive.
 and not redistributed; USCCB pages are scraped per date and never stored;
 LiturgicalCalendarAPI responses are cached under `tmp/` and not committed
 either; `books.py` follows the *SBL Handbook of Style*. No scripture text is in
-this repository. Calendar data for tier 2 and the gap-fill cache comes from
+this repository. Calendar data for the live cross-check and the curated cache
+comes from
 [LiturgicalCalendarAPI](https://github.com/Liturgical-Calendar/LiturgicalCalendarAPI)
 by John R. D'Orazio and contributors (Apache-2.0), an independent computation
 of the Roman Rite calendar — not affiliated with this project or with USCCB.

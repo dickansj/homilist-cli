@@ -7,6 +7,13 @@ citations included -- so a USCCB failure does not have to fall straight to the
 offline computus, which by its own admission does not know the whole sanctoral
 calendar.
 
+Neither live source is trusted blindly. When USCCB doesn't answer, new.py asks
+this API and the offline calendar and lectionary table for the same date and
+checks whether they agree -- see citations_agree(). When they don't (an entry
+in the offline table can just be wrong -- catholic-resources.org's own page
+gives 1 Cor 15:12-22 for lectionary 447/Year II, which is not what USCCB or
+this API say), new.py asks rather than silently trusting one of them.
+
 A request returns a whole liturgical year at once (Advent through the following
 Christ the King), so it is cached per (host, nation, requested year) under tmp/
 rather than re-fetched per date -- one request covers roughly fifty homilies. A
@@ -21,9 +28,28 @@ that field -- it is not USCCB's wording, and the convention across this archive
 is that lectionary_string is USCCB's or nothing. This module returns "name" for
 display only; new.py prints it but does not store it.
 
-    lookup(date, nation="US")   -> {"name", "readings"} or None
-    gap_fill_lookup(date)       -> the same shape, from tools/sync_litcal_api.py's
-                                    cache, with no network at call time
+overrides.json (tmp/litcal_api/overrides.json) is the curated answer for one
+date, checked before either live source is asked again. Two things end up in
+it: tools/sync_litcal_api.py's gap-filling, for a date the offline route can't
+answer at all, and a correction -- either saved automatically when new.py's
+conflict prompt is answered, or added by hand with
+`tools/sync_litcal_api.py --patch`, for a date the offline route answers
+*wrong*. Once a date is in there, it is settled: new.py stops re-asking.
+
+Keyed by the full ISO date, not a liturgical label or month-day, so a movable
+feast is safe: the 2026 Easter Vigil's entry lives under "2026-04-04" and is
+never consulted for 2027's Vigil ("2027-03-27"). The cost is that entries
+don't generalize across years -- a recurring gap like the Vigil's needs
+tools/sync_litcal_api.py to refill it every year, not just once.
+
+    lookup(date, nation="US")        -> {"name", "readings", "first",
+                                          "second", "gospel"} or None
+    citations_agree(a, b)            -> whether two such results, or the
+                                          equivalent from lectionary.py, are
+                                          the same reading
+    override_lookup(date)            -> the curated entry for a date, if any,
+                                          with no network call here
+    save_override(date, entry, source) -> write one, merging into the file
 """
 
 import json
@@ -134,8 +160,8 @@ def _select_readings(readings):
     return readings, _READING_KEYS
 
 
-def _readings_line(readings):
-    """The reading fields, in order, each normalized on its own.
+def _extract(readings):
+    """(full reading line, comparison fields) for one entry's readings.
 
     An appointed reading with an alternate comes back as one field with the two
     citations joined by a bare "|" -- the API's own delimiter, not this
@@ -143,21 +169,43 @@ def _readings_line(readings):
     abbreviated rather than just the first, and folding the pieces back
     together with "or" matches the convention the USCCB scraper already uses
     for the same situation.
+
+    The comparison fields are only first/second/gospel, not the full line: the
+    psalm's verse-list punctuation differs by source even when the passage
+    agrees ("8b+15" against "8b, 15"), which would read as a false conflict,
+    and the Vigil's extra Old Testament readings only ever come from this API
+    in the first place, so there is nothing on the other side to compare them
+    to.
     """
     readings, keys = _select_readings(readings)
-    parts = []
+    parts, fields = [], {}
     for key in keys:
         raw = readings.get(key, "")
         if not raw:
             continue
         alternates = [homilist.normalize_citations(alt.strip())
                       for alt in raw.split("|") if alt.strip()]
-        parts.append(" or ".join(alternates))
-    return "; ".join(parts)
+        text = " or ".join(alternates)
+        parts.append(text)
+        fields[key] = text
+    compare = {
+        "first": fields.get("first_reading", ""),
+        "second": fields.get("second_reading", "") or fields.get("epistle", ""),
+        "gospel": fields.get("gospel", ""),
+    }
+    return "; ".join(parts), compare
+
+
+def citations_agree(a, b):
+    """Whether two {"first", "second", "gospel"} field sets are the same
+    reading. Either side may come from this module or from
+    lectionary.readings_for() (normalized the same way by the caller) -- the
+    shape is what matters, not the source."""
+    return all(a.get(k, "") == b.get(k, "") for k in ("first", "second", "gospel"))
 
 
 def parse(data, target_date):
-    """Pure: one year's API response -> this date's reading line, or None.
+    """Pure: one year's API response -> this date's result, or None.
 
     Takes already-fetched JSON so it can be tested against a small fixture
     without a network, the same way homilist.scrape_readings() is tested
@@ -168,10 +216,10 @@ def parse(data, target_date):
     if not entries:
         return None
     primary = _select_primary(entries)
-    line = _readings_line(primary.get("readings") or {})
+    line, compare = _extract(primary.get("readings") or {})
     if not line:
         return None
-    return {"name": primary.get("name", ""), "readings": line}
+    return {"name": primary.get("name", ""), "readings": line, **compare}
 
 
 def lookup(target_date, nation="US"):
@@ -184,20 +232,40 @@ def lookup(target_date, nation="US"):
     return None
 
 
-def gap_fill_path():
-    return os.path.join(homilist.tmp_dir(), "litcal_api", "gap_fill.json")
+def override_path():
+    return os.path.join(homilist.tmp_dir(), "litcal_api", "overrides.json")
 
 
-_GAP_FILL = None
+_OVERRIDES = None
 
 
-def gap_fill_lookup(target_date):
-    """The offline half of the maintenance loop: whatever
-    tools/sync_litcal_api.py has already found for this date, with no network
-    call here. tier 3 in new.py checks this only after liturgical.py and
-    lectionary.py have both come up empty."""
-    global _GAP_FILL
-    if _GAP_FILL is None:
-        path = gap_fill_path()
-        _GAP_FILL = json.load(open(path, encoding="utf-8")) if os.path.exists(path) else {}
-    return _GAP_FILL.get(target_date.isoformat())
+def _load_overrides():
+    global _OVERRIDES
+    if _OVERRIDES is None:
+        path = override_path()
+        _OVERRIDES = json.load(open(path, encoding="utf-8")) if os.path.exists(path) else {}
+    return _OVERRIDES
+
+
+def override_lookup(target_date):
+    """The curated entry for a date, if any, with no network call here. new.py
+    checks this before asking either live source again -- see the module
+    docstring for what ends up in it and why."""
+    return _load_overrides().get(target_date.isoformat())
+
+
+def save_override(target_date, entry, source):
+    """Write one entry, merging into the file rather than replacing it.
+
+    `source` is a short provenance tag ("api", "api+usccb", "usccb", "manual",
+    "resolved") -- not consulted by new.py, but worth keeping around for
+    whoever next wonders where a date's answer came from.
+    """
+    global _OVERRIDES
+    path = override_path()
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    table = json.load(open(path, encoding="utf-8")) if os.path.exists(path) else {}
+    table[target_date.isoformat()] = {**entry, "source": source}
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(table, f, indent=1, sort_keys=True)
+    _OVERRIDES = table

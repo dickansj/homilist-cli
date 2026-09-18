@@ -85,6 +85,22 @@ def test_scraper_nbsp():
     check("citation still intact", readings.startswith("Isaiah 55:1-3"), True)
 
 
+def test_scraper_compound_title():
+    """A compound title puts its parenthetical on its own line in the source
+    HTML -- "The Commemoration of All the Faithful Departed\\n   (All Souls)"
+    -- and `.text` alone carries that newline and indentation into the title.
+    Found live: a title scraped this way for real came back with the
+    parenthetical on a line of its own, in tmp/litcal_api/overrides.json."""
+    html = open(os.path.join(FIXTURES, "usccb-sunday.html"), encoding="utf-8").read()
+    html = html.replace(
+        "<h2>Eighteenth Sunday In Ordinary Time</h2>",
+        "<h2>Eighteenth Sunday In Ordinary Time\n"
+        "                    (Some Feast)\n                </h2>")
+    _, title, _ = homilist.scrape_readings(html)
+    check("embedded newline and indentation collapse to one space", title,
+          "Eighteenth Sunday In Ordinary Time (Some Feast)")
+
+
 def test_scraper_failures():
     """A redesign must raise, not return blank metadata."""
     good = open(os.path.join(FIXTURES, "usccb-sunday.html"), encoding="utf-8").read()
@@ -585,6 +601,29 @@ def test_litcal_api():
     check("Holy Thursday's own readings, not the Chrism Mass's",
           got["readings"],
           "Exod 12:1–8, 11–14; 1 Cor 11:23–26; John 13:1–15")
+    check("comparison fields split out too", got["second"], "1 Cor 11:23–26")
+
+    got = parsed("2025-04-19")
+    check("the Vigil's epistle stands in for 'second' in the comparison fields",
+          got["second"], "Rom 6:3–11")
+
+
+def test_citations_agree():
+    """citations_agree() compares first/second/gospel only -- not the psalm,
+    whose punctuation differs by source even when the passage agrees."""
+    import litcal_api
+
+    a = {"first": "1 Cor 15:12–20", "second": "", "gospel": "Luke 8:1–3"}
+    b_same = {"first": "1 Cor 15:12–20", "second": "", "gospel": "Luke 8:1–3"}
+    b_diff = {"first": "1 Cor 15:12–22", "second": "", "gospel": "Luke 8:1–3"}
+
+    check("identical fields agree", litcal_api.citations_agree(a, b_same), True)
+    check("today's actual bug: a differing verse range does not agree",
+          litcal_api.citations_agree(a, b_diff), False)
+    check("a missing 'psalm' key in the comparison dict is a non-issue",
+          litcal_api.citations_agree({"first": "Luke 1:1", "gospel": "Luke 1:1"},
+                                     {"first": "Luke 1:1", "gospel": "Luke 1:1"}),
+          True)
 
 
 def test_lectionary_table():
@@ -944,6 +983,7 @@ def main():
     test_scraper()
     test_scraper_alternate()
     test_scraper_nbsp()
+    test_scraper_compound_title()
     test_scraper_failures()
     test_frontmatter_round_trip()
     test_frontmatter_rejects_bad_yaml()
@@ -954,6 +994,7 @@ def main():
     test_liturgical_calendar()
     test_lectionary_table()
     test_litcal_api()
+    test_citations_agree()
     test_header_line()
     test_sidecar_files()
     test_run_merging()

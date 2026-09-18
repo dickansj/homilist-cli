@@ -12,6 +12,14 @@ import yaml
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 
+# Overridable so the test suite (and tools/sync_litcal_api.py's opportunistic
+# check) can force USCCB closed deterministically; it answers intermittently,
+# so a test that depends on it failing would be as flaky as one that depends
+# on it working. Shared by new.py and tools/sync_litcal_api.py, the only two
+# places that fetch a USCCB page.
+USCCB_WEB_TEMPLATE = os.environ.get(
+    "USCCB_URL_TEMPLATE", "https://bible.usccb.org/bible/readings/%m%d%y.cfm")
+
 # Frontmatter field order, as written into new files.
 #
 # `rite` is empty for the Roman rite, which is the common case. Maronite and
@@ -350,12 +358,17 @@ def scrape_readings(html):
     header = title_block.select_one("h2")
     if not header:
         raise ScrapingException("no header in title block")
-    lectionary_string = header.text.strip()
+    # A compound title -- "The Commemoration of All the Faithful Departed
+    # (All Souls)" -- puts the parenthetical on its own line in the source
+    # HTML, so `.text` alone carries that newline and the indentation around
+    # it into the title. `.split()`/`" ".join()` collapses any run of
+    # whitespace, embedded or not, to a single space.
+    lectionary_string = " ".join(header.text.split())
 
     lect_par = title_block.select_one("p")
     if not lect_par:
         raise ScrapingException("no lectionary paragraph in title block")
-    lect_num = lect_par.text.strip().split(":")[-1].strip()
+    lect_num = " ".join(lect_par.text.split()).split(":")[-1].strip()
     if lect_num.isdigit():
         lect_num = int(lect_num)
 
@@ -367,19 +380,20 @@ def scrape_readings(html):
         reading_header = c_header.select_one("h3.name")
         if not reading_header:
             raise ScrapingException("no reading label header in one of the verse blocks")
-        label = reading_header.text.strip()
+        label = " ".join(reading_header.text.split())
         if label.lower() in SKIP_READINGS:
             continue
         address = c_header.select_one(".address a")
         if not address:
             raise ScrapingException(f"no address found for {label}")
+        citation = " ".join(address.text.split())
 
         if label.lower() == "or":
             if not readings:
                 raise ScrapingException("alternate reading with nothing to attach to")
-            readings[-1] += f" or {address.text.strip()}"
+            readings[-1] += f" or {citation}"
         else:
-            readings.append(address.text.strip())
+            readings.append(citation)
 
     # Zero readings means the page parsed but nothing matched -- the exact shape a
     # USCCB redesign takes. Returning "" here would write a homily file with blank
@@ -389,8 +403,7 @@ def scrape_readings(html):
             "no readings found: the page structure has probably changed"
         )
 
-    # USCCB uses non-breaking spaces inside citations; normalize them.
-    return lect_num, lectionary_string, "; ".join(readings).replace("\u00a0", " ")
+    return lect_num, lectionary_string, "; ".join(readings)
 
 # ---------------------------------------------------------------- citations
 

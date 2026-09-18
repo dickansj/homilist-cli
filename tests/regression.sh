@@ -88,6 +88,21 @@ fi
 words=$(./wc.py "$sandbox/2026-08-02.md" | grep -oE '[0-9,]+ words' | cut -d' ' -f1)
 expect "word count excludes frontmatter" "$words" "22"
 
+# The next several tests all touch tmp/litcal_api/overrides.json -- in the
+# repo rather than the sandbox, same as USCCB's and LiturgicalCalendarAPI's
+# page caches -- so any real file (today's own patched correction among them)
+# is backed up now and restored at the end, and emptied in between so a real
+# entry left by an earlier run, or by the preacher, can't change what any of
+# these tests observe.
+overrides="tmp/litcal_api/overrides.json"
+overrides_backup=""
+if [ -f "$overrides" ]; then
+	overrides_backup=$(mktemp)
+	cp "$overrides" "$overrides_backup"
+fi
+mkdir -p "$(dirname "$overrides")"
+echo '{}' > "$overrides"
+
 # new.py must produce a usable draft without the network. USCCB answers
 # intermittently -- it sits behind a bot challenge -- and LiturgicalCalendarAPI
 # is a live third party too, so the offline calendar and lectionary table are
@@ -116,27 +131,57 @@ if grep -q "^lectionary_string: ''$" "$sandbox/2026-03-08.md"; then
 	echo "OK"; else echo "FAIL"; fail=1
 fi
 
-# The last tier of all: what tools/sync_litcal_api.py has already cached for a
-# date the offline calendar cannot compute on its own (2026-12-22 falls in the
-# O Antiphon days, which liturgical.py's ferial formula does not cover -- see
-# its own test in tests/units.py). The cache lives in tmp/, in the repo rather
-# than the sandbox (same as USCCB's page cache), so any real cache is backed up
-# and restored around this test rather than overwritten for good.
-gapfill="tmp/litcal_api/gap_fill.json"
-gapfill_backup=""
-if [ -f "$gapfill" ]; then
-	gapfill_backup=$(mktemp)
-	cp "$gapfill" "$gapfill_backup"
+# When LiturgicalCalendarAPI and the offline table both answer for a date but
+# disagree, new.py must not silently trust either -- it prints both and, with
+# no one to ask (stdin here is not a tty), leaves `readings` blank rather than
+# guess. The API side is faked by seeding its year cache for a throwaway host,
+# so the disagreement is deterministic rather than depending on whatever
+# catholic-resources.org's table happens to say today -- today's own version
+# of exactly this (lectionary 447/Year II, 1 Cor 15:12-22 where USCCB and the
+# API both say 12-20) is why this exists.
+fixture_host="fixture.invalid"
+mkdir -p "tmp/litcal_api/$fixture_host"
+cat > "tmp/litcal_api/$fixture_host/US_2026.json" <<'EOF'
+{"litcal": [{"date": "2026-06-15T00:00:00+00:00", "name": "Monday of the 11th Week in Ordinary Time",
+             "grade": 0,
+             "readings": {"first_reading": "1 Kings 21:1-10", "responsorial_psalm": "Psalm 5:2-3ab, 4b-6a, 6b-7",
+                          "gospel_acclamation": "", "gospel": "Matthew 5:38-42"}}]}
+EOF
+
+printf "  %-40s " "API vs. offline disagreement is flagged, not guessed"
+if HOMILIES_DIR="$sandbox" USCCB_URL_TEMPLATE="http://127.0.0.1:9/%m%d%y.cfm" \
+        LITCAL_API_URL_TEMPLATE="http://$fixture_host/{nation}/{year}" \
+        ./new.py --date 2026-06-15 </dev/null >/tmp/conflict_out.$$ 2>&1; then
+	echo "FAIL (should have exited non-zero: nothing was resolved)"; fail=1
+else
+	if grep -q "disagree" /tmp/conflict_out.$$ \
+	   && grep -q "1 Kgs 21:1–10" /tmp/conflict_out.$$ \
+	   && grep -q "1 Kgs 21:1–16" /tmp/conflict_out.$$ \
+	   && grep -q "^lectionary_number: 365$" "$sandbox/2026-06-15.md" \
+	   && grep -q "^readings: ''$" "$sandbox/2026-06-15.md" \
+	   && grep -q "^lectionary_string: ''$" "$sandbox/2026-06-15.md"; then
+		echo "OK"
+	else
+		echo "FAIL (conflict not reported, or blank metadata wasn't written)"; fail=1
+	fi
 fi
-mkdir -p "$(dirname "$gapfill")"
-cat > "$gapfill" <<'EOF'
+rm -f /tmp/conflict_out.$$
+rm -rf "tmp/litcal_api/$fixture_host"
+
+# The curated cache also answers for a date the offline calendar cannot
+# compute at all (2026-12-22 falls in the O Antiphon days, which
+# liturgical.py's ferial formula does not cover -- see its own test in
+# tests/units.py), whether that entry came from tools/sync_litcal_api.py or,
+# as here, was written directly to exercise the read side alone.
+cat > "$overrides" <<'EOF'
 {
  "2026-12-22": {"name": "Tuesday of the 4th Week of Advent",
-                "readings": "Mal 3:1–4, 23–24; Ps 25:4–5b, 8–9, 10, 14; Luke 1:57–66"}
+                "readings": "Mal 3:1–4, 23–24; Ps 25:4–5b, 8–9, 10, 14; Luke 1:57–66",
+                "source": "api"}
 }
 EOF
 
-printf "  %-40s " "new.py uses the gap-fill cache offline"
+printf "  %-40s " "new.py uses a saved answer offline"
 if HOMILIES_DIR="$sandbox" USCCB_URL_TEMPLATE="http://127.0.0.1:9/%m%d%y.cfm" \
         LITCAL_API_URL_TEMPLATE="http://127.0.0.1:9/{nation}/{year}" \
         ./new.py --date 2026-12-22 </dev/null >/dev/null 2>&1; then
@@ -146,16 +191,16 @@ if HOMILIES_DIR="$sandbox" USCCB_URL_TEMPLATE="http://127.0.0.1:9/%m%d%y.cfm" \
 	   && grep -q "Luke 1:57" "$sandbox/2026-12-22.md"; then
 		echo "OK"
 	else
-		echo "FAIL (gap-fill cache not used)"; fail=1
+		echo "FAIL (saved answer not used)"; fail=1
 	fi
 else
 	echo "FAIL (new.py exited non-zero)"; fail=1
 fi
 
-if [ -n "$gapfill_backup" ]; then
-	cp "$gapfill_backup" "$gapfill"; rm -f "$gapfill_backup"
+if [ -n "$overrides_backup" ]; then
+	cp "$overrides_backup" "$overrides"; rm -f "$overrides_backup"
 else
-	rm -f "$gapfill"
+	rm -f "$overrides"
 fi
 
 # `preached` is the line you prune by hand. Neither route fills it -- doing so on
