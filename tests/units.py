@@ -455,6 +455,138 @@ def test_liturgical_calendar():
 
 # ---------------------------------------------------------------- lectionary
 
+# ---------------------------------------------------------------- LiturgicalCalendarAPI
+
+def test_litcal_api():
+    """parse() against a small fixture -- no network, same idea as the USCCB
+    scraper tests: the fetch and the parse are separate, so the parse is the
+    part worth testing on its own."""
+    import datetime
+    import litcal_api
+
+    fixture = {"litcal": [
+        # A plain ferial weekday.
+        {"date": "2025-12-01T00:00:00+00:00", "name": "Monday of the 1st Week of Advent",
+         "grade": 0,
+         "readings": {"first_reading": "Isaiah 4:2-6",
+                      "responsorial_psalm": "Psalm 122:1-2, 3-4b, 4cd-5, 6-7, 8-9",
+                      "gospel_acclamation": "Psalm 80:4",
+                      "gospel": "Matthew 8:5-11"}},
+        # A weekday sharing its date with an optional memorial: the optional
+        # memorial does not displace the ferial readings.
+        {"date": "2025-12-04T00:00:00+00:00", "name": "Thursday of the 1st Week of Advent",
+         "grade": 0,
+         "readings": {"first_reading": "Isaiah 26:1-6",
+                      "responsorial_psalm": "Psalm 118:1, 8-9, 19-21, 25-27a",
+                      "gospel": "Matthew 7:21, 24-27"}},
+        {"date": "2025-12-04T00:00:00+00:00", "name": "Saint John Damascene, Priest and Doctor",
+         "grade": 2,
+         "readings": {"first_reading": "1 John 4:4-9", "gospel": "Matthew 5:13-16"}},
+        # An obligatory memorial with no competing weekday entry: it wins.
+        {"date": "2025-12-03T00:00:00+00:00", "name": "Saint Francis Xavier, Priest",
+         "grade": 3,
+         "readings": {"first_reading": "1 Corinthians 9:16-19, 22-23",
+                      "responsorial_psalm": "Psalm 117:1bc, 2",
+                      "gospel": "Mark 16:15-20"}},
+        # A vigil Mass beside the Sunday it anticipates: the vigil is set aside
+        # in favor of the day itself.
+        {"date": "2025-11-30T00:00:00+00:00", "name": "First Sunday of Advent Vigil Mass",
+         "grade": 7, "is_vigil_mass": True,
+         "readings": {"first_reading": "Isaiah 2:1-5", "responsorial_psalm": "Psalm 122",
+                      "second_reading": "Romans 13:11-14", "gospel": "Matthew 24:37-44"}},
+        {"date": "2025-11-30T00:00:00+00:00", "name": "First Sunday of Advent",
+         "grade": 7,
+         "readings": {"first_reading": "Isaiah 2:1-5", "responsorial_psalm": "Psalm 122",
+                      "second_reading": "Romans 13:11-14", "gospel": "Matthew 24:37-44"}},
+        # A date with an event but nothing to proclaim.
+        {"date": "2025-12-10T00:00:00+00:00", "name": "Nothing to preach on", "grade": 0,
+         "readings": {}},
+        # The API's own delimiter for an alternate reading is a bare "|" inside
+        # one field, not the "; " this project uses between readings.
+        {"date": "2025-12-21T00:00:00+00:00", "name": "Monday of the 4th Week of Advent",
+         "grade": 0,
+         "readings": {"first_reading": "Song of Songs 2:8-14|Zephaniah 3:14-18a",
+                      "responsorial_psalm": "Psalm 33:2-3, 11-12, 20-21",
+                      "gospel": "Luke 1:39-45"}},
+        # A Mass with more than one time of day nests a complete readings dict
+        # under each instead of giving readings directly.
+        {"date": "2025-12-25T00:00:00+00:00", "name": "Christmas", "grade": 7,
+         "readings": {
+             "night": {"first_reading": "Isaiah 9:1-6", "gospel": "Luke 2:1-14"},
+             "dawn": {"first_reading": "Isaiah 62:11-12", "gospel": "Luke 2:15-20"},
+             "day": {"first_reading": "Isaiah 52:7-10", "responsorial_psalm": "Psalm 98:1-6",
+                     "second_reading": "Hebrews 1:1-6", "gospel": "John 1:1-18"}}},
+        # The Easter Vigil numbers up to seven Old Testament readings plus an
+        # epistle, not the ordinary first/second/gospel shape.
+        {"date": "2025-04-19T00:00:00+00:00", "name": "Easter Vigil", "grade": 7,
+         "readings": {"first_reading": "Genesis 1:1-2:2", "responsorial_psalm": "Psalm 104",
+                      "third_reading": "Exodus 14:15-15:1", "responsorial_psalm_3": "Exodus 15",
+                      "epistle": "Romans 6:3-11", "responsorial_psalm_epistle": "Psalm 118",
+                      "gospel_acclamation": "", "gospel": "Matthew 28:1-10"}},
+        # The Chrism Mass shares Holy Thursday's date and its grade 7 with the
+        # Evening Mass of the Lord's Supper -- the parish's actual liturgy that
+        # day -- so a plain tie-break by grade could pick either.
+        {"date": "2025-04-17T00:00:00+00:00", "name": "Chrism Mass", "grade": 7,
+         "readings": {"first_reading": "Isaiah 61:1-3a, 6a, 8b-9", "gospel": "Luke 4:16-21"}},
+        {"date": "2025-04-17T00:00:00+00:00", "name": "Holy Thursday", "grade": 7,
+         "readings": {"first_reading": "Exodus 12:1-8, 11-14",
+                      "second_reading": "1 Corinthians 11:23-26", "gospel": "John 13:1-15"}},
+    ]}
+
+    def parsed(iso):
+        return litcal_api.parse(fixture, datetime.date.fromisoformat(iso))
+
+    got = parsed("2025-12-01")
+    check("weekday name", got["name"], "Monday of the 1st Week of Advent")
+    check("weekday readings, acclamation skipped", got["readings"],
+          "Isa 4:2–6; Ps 122:1–2, 3–4b, 4cd-5, 6–7, 8–9; Matt 8:5–11")
+
+    got = parsed("2025-12-04")
+    check("optional memorial does not displace the weekday", got["name"],
+          "Thursday of the 1st Week of Advent")
+    check("weekday readings win", got["readings"],
+          "Isa 26:1–6; Ps 118:1, 8–9, 19–21, 25–27a; Matt 7:21, 24–27")
+
+    got = parsed("2025-12-03")
+    check("obligatory memorial with no weekday competitor", got["name"],
+          "Saint Francis Xavier, Priest")
+    check("memorial readings", got["readings"],
+          "1 Cor 9:16–19, 22–23; Ps 117:1bc, 2; Mark 16:15–20")
+
+    got = parsed("2025-11-30")
+    check("the day wins over its own vigil", got["name"], "First Sunday of Advent")
+    check("Sunday readings", got["readings"],
+          "Isa 2:1–5; Ps 122; Rom 13:11–14; Matt 24:37–44")
+
+    check("a date with nothing to proclaim parses to None",
+          parsed("2025-12-10"), None)
+    check("a date with no entry at all parses to None",
+          parsed("2025-12-26"), None)
+
+    got = parsed("2025-12-21")
+    check("the API's '|' alternate becomes 'or', both books abbreviated",
+          got["readings"],
+          "Song 2:8–14 or Zeph 3:14–18a; "
+          "Ps 33:2–3, 11–12, 20–21; Luke 1:39–45")
+
+    got = parsed("2025-12-25")
+    check("a multi-Mass day defaults to the day Mass", got["readings"],
+          "Isa 52:7–10; Ps 98:1–6; Heb 1:1–6; John 1:1–18")
+
+    got = parsed("2025-04-19")
+    check("the Vigil's numbered readings all come through, in order",
+          got["readings"],
+          "Gen 1:1–2:2; Ps 104; Exod 14:15–15:1; Exod 15; "
+          "Rom 6:3–11; Ps 118; Matt 28:1–10")
+
+    got = parsed("2025-04-17")
+    check("the parish's Evening Mass wins over the diocese's Chrism Mass",
+          got["name"], "Holy Thursday")
+    check("Holy Thursday's own readings, not the Chrism Mass's",
+          got["readings"],
+          "Exod 12:1–8, 11–14; 1 Cor 11:23–26; John 13:1–15")
+
+
 def test_lectionary_table():
     """The readings table, where it has been fetched.
 
@@ -821,6 +953,7 @@ def main():
     test_standardize_day()
     test_liturgical_calendar()
     test_lectionary_table()
+    test_litcal_api()
     test_header_line()
     test_sidecar_files()
     test_run_merging()

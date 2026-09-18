@@ -21,6 +21,7 @@ import requests
 
 import homilist
 import lectionary
+import litcal_api
 import liturgical
 
 # Overridable so the test suite can force the local fallback deterministically;
@@ -444,10 +445,14 @@ FUNERAL = re.search(r"\bfunerals?\b", metadata["occasion"], re.I)
 
 # USCCB is tried once. It is the more current source and it owns
 # `lectionary_string`, the calendar's own full name for the date -- nothing
-# local can supply that. But it sits behind a bot challenge that a script
-# usually fails, so a failure falls through to the local route rather than
-# leaving the draft blank. One attempt, not a retry loop: the failure is a
-# policy, not a hiccup.
+# else supplies that; LiturgicalCalendarAPI and the offline route both leave it
+# empty rather than substitute their own wording. But USCCB sits behind a bot
+# challenge that a script usually fails, so a failure falls through: first to
+# LiturgicalCalendarAPI (live, but independent of USCCB's uptime), then to the
+# offline calendar and lectionary table, then to whatever
+# tools/sync_litcal_api.py has already cached for a date the offline route
+# cannot answer on its own. One attempt at each, not a retry loop: the failure
+# is a policy, not a hiccup.
 if FUNERAL:
     print(f"Funeral ({metadata['occasion']}) — no lectionary number; "
           "the readings are chosen for the Mass.")
@@ -490,33 +495,63 @@ else:
         # One line is enough to say which way the draft was built.
         message = getattr(exc, "message", exc.__class__.__name__)
         print(f"   USCCB didn't answer ({message.splitlines()[0][:90]})")
-        print("   Falling back to the local calendar and lectionary table...")
+        print("   Falling back to LiturgicalCalendarAPI...")
 
-        number = liturgical.lectionary_number(target_date)
-        cycle = liturgical.ferial_year(target_date)
+        # `readings` only: like the offline route below, this is not USCCB's
+        # wording, so `lectionary_string` stays empty rather than borrow a
+        # different source's phrasing for the same field.
+        try:
+            found = litcal_api.lookup(target_date)
+        except litcal_api.LitCalAPIError as api_exc:
+            print(f"   LiturgicalCalendarAPI didn't answer "
+                  f"({api_exc.message.splitlines()[0][:90]})")
+            found = None
 
-        if number:
-            metadata["lectionary_number"] = number
-            # `preached` is deliberately left empty, as on the USCCB route. It is
-            # the line you prune by hand, and filling it here made the scaffolder
-            # behave two different ways depending on whether a website answered.
-            metadata["readings"] = lectionary.readings_line(number, cycle)
-
-        if not metadata["readings"]:
-            err = True
-            if not number:
-                sys.stderr.write(
-                    f"   The calendar has no lectionary number for {target_date} "
-                    "(most of the sanctoral cycle is not in it).\n")
-            elif not lectionary.available():
-                sys.stderr.write(
-                    "   The lectionary table has not been built yet — run "
-                    "tools/fetch_lectionary.py once.\n")
-            else:
-                sys.stderr.write(f"   Lectionary {number} is not in the table.\n")
-            sys.stderr.write("   Creating the file with mostly blank metadata...\n")
+        if found:
+            metadata["readings"] = found["readings"]
+            print(f"   LiturgicalCalendarAPI: {found['name']}")
         else:
-            print(f"   local: {metadata['lectionary_number']}: {metadata['title']}")
+            print("   Falling back to the offline calendar and lectionary table...")
+
+        if not found:
+            number = liturgical.lectionary_number(target_date)
+            cycle = liturgical.ferial_year(target_date)
+
+            if number:
+                metadata["lectionary_number"] = number
+                # `preached` is deliberately left empty, as on the USCCB route. It is
+                # the line you prune by hand, and filling it here made the scaffolder
+                # behave two different ways depending on whether a website answered.
+                metadata["readings"] = lectionary.readings_line(number, cycle)
+
+            if metadata["readings"]:
+                print(f"   local: {metadata['lectionary_number']}: {metadata['title']}")
+            else:
+                # Whatever tools/sync_litcal_api.py has already cached for this
+                # date, if the offline calendar and table cannot answer on their
+                # own -- no network call here, so this still works with none.
+                filled = litcal_api.gap_fill_lookup(target_date)
+                if filled:
+                    metadata["readings"] = filled["readings"]
+                    print(f"   gap-fill cache: {filled['name']}")
+                    print("   (from LiturgicalCalendarAPI, synced by "
+                          "tools/sync_litcal_api.py — not live)")
+
+            if not metadata["readings"]:
+                err = True
+                if not number:
+                    sys.stderr.write(
+                        f"   The calendar has no lectionary number for {target_date} "
+                        "(most of the sanctoral cycle is not in it).\n")
+                elif not lectionary.available():
+                    sys.stderr.write(
+                        "   The lectionary table has not been built yet — run "
+                        "tools/fetch_lectionary.py once.\n")
+                else:
+                    sys.stderr.write(f"   Lectionary {number} is not in the table.\n")
+                sys.stderr.write("   Creating the file with mostly blank metadata...\n")
+
+        if metadata["readings"]:
             print("   (lectionary_string stays empty — that is USCCB's wording)")
 
 

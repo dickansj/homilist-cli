@@ -89,12 +89,14 @@ words=$(./wc.py "$sandbox/2026-08-02.md" | grep -oE '[0-9,]+ words' | cut -d' ' 
 expect "word count excludes frontmatter" "$words" "22"
 
 # new.py must produce a usable draft without the network. USCCB answers
-# intermittently -- it sits behind a bot challenge -- so the local calendar and
-# lectionary table are the fallback, and this forces that path by pointing the
-# lookup at a closed port. A test that relied on USCCB failing would be as flaky
-# as one that relied on it working.
-printf "  %-40s " "new.py falls back to the local calendar"
+# intermittently -- it sits behind a bot challenge -- and LiturgicalCalendarAPI
+# is a live third party too, so the offline calendar and lectionary table are
+# the last resort, and this forces that path by pointing both lookups at a
+# closed port. A test that relied on either answering, or failing, would be as
+# flaky as one that depended on the network at all.
+printf "  %-40s " "new.py falls back to the offline calendar"
 if HOMILIES_DIR="$sandbox" USCCB_URL_TEMPLATE="http://127.0.0.1:9/%m%d%y.cfm" \
+        LITCAL_API_URL_TEMPLATE="http://127.0.0.1:9/{nation}/{year}" \
         ./new.py --date 2026-03-08 </dev/null >/dev/null 2>&1; then
 	if grep -q "^lectionary_number: 28$" "$sandbox/2026-03-08.md" \
 	   && grep -q "^title: Sun 3rd of Lent$" "$sandbox/2026-03-08.md" \
@@ -107,11 +109,53 @@ else
 	echo "FAIL (new.py exited non-zero)"; fail=1
 fi
 
-# lectionary_string is USCCB's wording; the local route must leave it empty
+# lectionary_string is USCCB's wording; the offline route must leave it empty
 # rather than substitute another source's phrasing for it.
-printf "  %-40s " "local route leaves lectionary_string"
+printf "  %-40s " "offline route leaves lectionary_string"
 if grep -q "^lectionary_string: ''$" "$sandbox/2026-03-08.md"; then
 	echo "OK"; else echo "FAIL"; fail=1
+fi
+
+# The last tier of all: what tools/sync_litcal_api.py has already cached for a
+# date the offline calendar cannot compute on its own (2026-12-22 falls in the
+# O Antiphon days, which liturgical.py's ferial formula does not cover -- see
+# its own test in tests/units.py). The cache lives in tmp/, in the repo rather
+# than the sandbox (same as USCCB's page cache), so any real cache is backed up
+# and restored around this test rather than overwritten for good.
+gapfill="tmp/litcal_api/gap_fill.json"
+gapfill_backup=""
+if [ -f "$gapfill" ]; then
+	gapfill_backup=$(mktemp)
+	cp "$gapfill" "$gapfill_backup"
+fi
+mkdir -p "$(dirname "$gapfill")"
+cat > "$gapfill" <<'EOF'
+{
+ "2026-12-22": {"name": "Tuesday of the 4th Week of Advent",
+                "readings": "Mal 3:1–4, 23–24; Ps 25:4–5b, 8–9, 10, 14; Luke 1:57–66"}
+}
+EOF
+
+printf "  %-40s " "new.py uses the gap-fill cache offline"
+if HOMILIES_DIR="$sandbox" USCCB_URL_TEMPLATE="http://127.0.0.1:9/%m%d%y.cfm" \
+        LITCAL_API_URL_TEMPLATE="http://127.0.0.1:9/{nation}/{year}" \
+        ./new.py --date 2026-12-22 </dev/null >/dev/null 2>&1; then
+	if grep -q "^lectionary_number: ''$" "$sandbox/2026-12-22.md" \
+	   && grep -q "^lectionary_string: ''$" "$sandbox/2026-12-22.md" \
+	   && grep -q "Mal 3:1" "$sandbox/2026-12-22.md" \
+	   && grep -q "Luke 1:57" "$sandbox/2026-12-22.md"; then
+		echo "OK"
+	else
+		echo "FAIL (gap-fill cache not used)"; fail=1
+	fi
+else
+	echo "FAIL (new.py exited non-zero)"; fail=1
+fi
+
+if [ -n "$gapfill_backup" ]; then
+	cp "$gapfill_backup" "$gapfill"; rm -f "$gapfill_backup"
+else
+	rm -f "$gapfill"
 fi
 
 # `preached` is the line you prune by hand. Neither route fills it -- doing so on
